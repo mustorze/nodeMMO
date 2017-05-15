@@ -1,15 +1,16 @@
 {
   "name": "nodejsmmo",
   "version": "1.0.0",
-  "description": "nodejsmmo",
+  "description": "Node MMO Gamming",
   "main": "app.js",
   "dependencies": {
-    "express": "^4.15.2"
+    "express": "^4.15.2",
+    "socket.io": "^2.0.1"
   },
   "devDependencies": {},
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1"
   },
-  "author": "",
+  "author": "Henrique Duarte Coelho",
   "license": "ISC"
 }
