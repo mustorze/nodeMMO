@@ -1,3 +1,6 @@
+var mongojs = require('mongojs');
+var db = mongojs('localhost:27017/myGame', ['account', 'progress']);
+
 var express = require('express');
 var app = express();
 var server = require('http').Server(app);
@@ -13,13 +16,25 @@ console.log('Server online');
 
 var SOCKET_LIST = {};
 
-var Entity = function(id) {
+var Entity = function(param) {
 	var self = {
 		x: 250,
 		y: 250,
 		spdX: 0,
 		spdY: 0,
-		id:""
+		id: "",
+		map: "forest"
+	}
+
+	if(param){
+		if(param.x)
+		self.x = param.x;
+		if(param.y)
+		self.y = param.y;
+		if(param.map)
+		self.map = param.map;
+		if(param.id)
+		self.id = param.id;
 	}
 
 	self.update = function () {
@@ -38,11 +53,11 @@ var Entity = function(id) {
 	return self;
 }
 
-var Player = function(id) {
-	var self = Entity();
+var Player = function(param) {
+	var self = Entity(param);
 
-	self.id = id;
 	self.number = "" + Math.floor(10 * Math.random());
+	self.username = param.username;
 	self.pressingRight = false;
 	self.pressingLeft = false;
 	self.pressingUp = false;
@@ -50,6 +65,9 @@ var Player = function(id) {
 	self.pressingAttack = false;
 	self.mouseAngle = 0;
 	self.maxSpd = 10;
+	self.hp = 10;
+	self.hpMax = 10;
+	self.score = 0;
 
 	var super_update = self.update;
 	self.update = function (){
@@ -65,9 +83,13 @@ var Player = function(id) {
 	}
 
 	self.shotBullet = function (angle) {
-		var b = Bullet(self.id, angle);
-		b.x = self.x;
-		b.y = self.y;
+		Bullet({
+			parent: self.id,
+			angle: angle,
+			x: self.x,
+			y: self.y,
+			map: self.map
+		});
 	}
 
 	self.updateSpd = function() {
@@ -86,13 +108,53 @@ var Player = function(id) {
 		self.spdY = 0;
 
 	}
-	Player.list[id] = self;
+
+	Player.list[self.id] = self;
+
+	self.getInitPack = function () {
+
+		return {
+			id: self.id,
+			x: self.x,
+			y: self.y,
+			number: self.number,
+			hp: self.hp,
+			hpMax: self.hpMax,
+			score: self.score,
+			map: self.map
+		};
+
+	}
+
+	self.getUpdatePack = function () {
+		return {
+
+			id: self.id,
+			x: self.x,
+			y: self.y,
+			hp: self.hp,
+			score: self.score,
+			map: self.map
+		};
+	}
+
+	initPack.player.push(self.getInitPack());
+
 	return self;
 }
 
 Player.list = {};
-Player.onConnect = function (socket) {
-	var player = Player(socket.id);
+Player.onConnect = function (socket, username) {
+
+	var map = 'florest';
+	if (Math.random() < 0.5)
+	map = 'field';
+
+	var player = Player({
+		id: socket.id,
+		map: map,
+		username: username
+	});
 
 	socket.on('keyPress', function (data) {
 
@@ -111,10 +173,57 @@ Player.onConnect = function (socket) {
 
 	});
 
+	socket.on('changeMap', function (data) {
+
+		if (player.map == 'field')
+		player.map = 'florest';
+		else
+		player.map = 'field';
+
+	});
+
+	socket.emit('init', {
+
+		selfId: socket.id,
+		player: Player.getAllInitPack(),
+		bullet: Bullet.getAllInitPack()
+
+	});
+
+	socket.on('sendMsgToServer', function (data) {
+
+		for(var i in SOCKET_LIST)
+		SOCKET_LIST[i].emit('addToChat', player.username + ": " + data);
+
+	});
+
+	socket.on('sendPmToServer', function (data) {
+		var recipientSocket = null;
+
+		for(var i in Player.list)
+		if(Player.list[i].username === data.username)
+		recipientSocket = SOCKET_LIST[i];
+
+		if (recipientSocket == null) {
+			socket.emit('addToChat', 'The player ' + data.username + ' is not online.');
+		} else {
+			recipientSocket.emit('addToChat', 'From: ' + player.username + ': ' + data.message);
+			socket.emit('addToChat', 'To: ' + data.username + ': ' + data.message);
+		}
+	});
+
+}
+
+Player.getAllInitPack = function () {
+	var players = [];
+	for (var i in Player.list)
+	players.push(Player.list[i].getInitPack());
+	return players;
 }
 
 Player.onDisconnect = function (socket) {
 	delete Player.list[socket.id];
+	removePack.player.push(socket.id);
 }
 
 Player.update = function () {
@@ -125,24 +234,22 @@ Player.update = function () {
 		var player = Player.list[i];
 		player.update();
 
-		pack.push({
-
-			x: player.x,
-			y: player.y,
-			number: player.number
-
-		});
+		pack.push(player.getUpdatePack());
 
 	}
 	return pack;
 }
 
-var Bullet = function(parent, angle) {
-	var self = Entity();
+var Bullet = function(param) {
+	var self = Entity(param);
+
 	self.id = Math.random();
-	self.spdX = Math.cos(angle/180*Math.PI) * 10;
-	self.spdY = Math.sin(angle/180*Math.PI) * 10;
-	self.parent = parent;
+
+	self.angle = param.angle;
+
+	self.spdX = Math.cos(self.angle / 180 * Math.PI) * 10;
+	self.spdY = Math.sin(self.angle / 180 * Math.PI) * 10;
+	self.parent = param.parent;
 	self.timer = 0;
 	self.toRemove = false;
 
@@ -154,8 +261,23 @@ var Bullet = function(parent, angle) {
 
 		for(var i in Player.list) {
 			var p = Player.list[i];
-			if(self.getDistance(p) < 32 && self.parent !== p.id) {
+			if(self.map === p.map && self.getDistance(p) < 32 && self.parent !== p.id) {
 				// collision
+				p.hp -= 1;
+
+				var shooter = Player.list[self.parent];
+
+				if (p.hp <= 0) {
+
+					if (shooter) {
+						shooter.score += 1;
+					}
+
+					p.hp = p.hpMax;
+					p.x = Math.random() * 500;
+					p.y = Math.random() * 500;
+				}
+
 				self.toRemove = true;
 			}
 		}
@@ -163,11 +285,42 @@ var Bullet = function(parent, angle) {
 	}
 
 	Bullet.list[self.id] = self;
+
+	self.getInitPack = function () {
+
+		return {
+			id: self.id,
+			x: self.x,
+			y: self.y,
+			map: self.map
+		};
+
+	}
+
+	self.getUpdatePack = function () {
+		return {
+
+			id: self.id,
+			x: self.x,
+			y: self.y
+
+		};
+	}
+
+	initPack.bullet.push(self.getInitPack());
+
 	return self;
 
 }
 
 Bullet.list = {};
+
+Bullet.getAllInitPack = function () {
+	var bullets = [];
+	for (var i in Bullet.list)
+	bullets.push(Bullet.list[i].getInitPack());
+	return bullets;
+}
 
 Bullet.update = function () {
 
@@ -178,21 +331,41 @@ Bullet.update = function () {
 		var bullet = Bullet.list[i];
 		bullet.update();
 
-		if(bullet.toRemove)
+		if(bullet.toRemove) {
 			delete Bullet.list[i];
-		else
-		pack.push({
-
-			x: bullet.x,
-			y: bullet.y,
-
-		});
+			removePack.bullet.push(bullet.id);
+		} else
+		pack.push(bullet.getUpdatePack());
 
 	}
 	return pack;
 }
 
 var DEBUG = false;
+
+var isValidPassword = function(data, cb) {
+	db.account.find({username:data.username, password:data.password}, function(err, res){
+		if(res.length > 0)
+		cb(true);
+		else
+		cb(false);
+	});
+}
+
+var isUsernameTaken = function(data, cb) {
+	db.account.find({username:data.username}, function(err, res){
+		if(res.length > 0)
+		cb(true);
+		else
+		cb(false);
+	});
+}
+
+var addUser = function(data, cb) {
+	db.account.insert({username:data.username, password:data.password}, function(err){
+		cb();
+	});
+}
 
 var io = require('socket.io')(server, {});
 io.sockets.on('connection', function(socket){
@@ -203,21 +376,37 @@ io.sockets.on('connection', function(socket){
 
 	console.log('Socket connection');
 
-	Player.onConnect(socket);
+	socket.on('signUp', function (data) {
+
+		isUsernameTaken(data, function(res) {
+			if(res) {
+				socket.emit('signUpResponse', {sucess: false});
+			} else {
+				addUser(data, function() {
+					socket.emit('signUpResponse', {sucess: true});
+				});
+			}
+		});
+
+	});
+
+	socket.on('signIn', function (data) {
+
+		isValidPassword(data, function (res) {
+			if(res) {
+				Player.onConnect(socket, data.username);
+				socket.emit('signInResponse', {sucess: true});
+			} else {
+				socket.emit('signInResponse', {sucess: false});
+			}
+		});
+
+	});
 
 	socket.on('disconnect', function () {
 
 		delete SOCKET_LIST[socket.id];
 		Player.onDisconnect(socket);
-
-	});
-
-	socket.on('sendMsgToServer', function (data) {
-
-		var playerName = ("" + socket.id).slice(2, 7);
-
-		for(var i in SOCKET_LIST)
-		SOCKET_LIST[i].emit('addToChat', playerName + ": " + data);
 
 	});
 
@@ -232,6 +421,9 @@ io.sockets.on('connection', function(socket){
 
 });
 
+var initPack = {player:[], bullet:[]};
+var removePack = {player:[], bullet:[]};
+
 setInterval(function() {
 
 	var pack = {
@@ -242,8 +434,15 @@ setInterval(function() {
 	for(var i in SOCKET_LIST){
 
 		var socket = SOCKET_LIST[i];
-		socket.emit('newPositions', pack);
+		socket.emit('init', initPack);
+		socket.emit('update', pack);
+		socket.emit('remove', removePack);
 
 	}
+
+	initPack.player = [];
+	initPack.bullet = [];
+	removePack.player = [];
+	removePack.bullet = [];
 
 }, 1000/25);
